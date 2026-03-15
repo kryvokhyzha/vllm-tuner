@@ -1,6 +1,6 @@
 # Low-latency tuning — single GPU
 # Usage: python -m vllm_tuner.cli.main run --config configs/low_latency_gpu.yaml
-model: "meta-llama/Llama-3-8B-Instruct"
+model: "meta-llama/Llama-3.1-8B-Instruct"
 
 study:
   name: low-latency-study

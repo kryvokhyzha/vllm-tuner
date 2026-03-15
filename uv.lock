@@ -2902,10 +2902,9 @@ wheels = [
 
 [[package]]
 name = "vllm-tuner"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
-    { name = "datasets" },
     { name = "fire" },
     { name = "huggingface-hub", extra = ["hf-xet"] },
     { name = "joblib" },
@@ -2959,11 +2958,10 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "datasets", specifier = "~=4.7.0" },
     { name = "fire", specifier = "~=0.7.1" },
     { name = "guidellm", marker = "extra == 'guidellm'" },
     { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27" },
-    { name = "huggingface-hub", extras = ["hf-xet"], specifier = "~=1.7.1" },
+    { name = "huggingface-hub", extras = ["hf-xet"] },
     { name = "joblib", specifier = "~=1.5.2" },
     { name = "loguru", specifier = "~=0.7.3" },
     { name = "nvidia-ml-py", marker = "extra == 'gpu'", specifier = ">=12.560.30" },

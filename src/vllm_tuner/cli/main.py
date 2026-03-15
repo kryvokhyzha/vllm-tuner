@@ -112,7 +112,7 @@ class CLI:
         """Start a new tuning study.
 
         Args:
-            model: HuggingFace model name (e.g., meta-llama/Llama-3-8B-Instruct)
+            model: HuggingFace model name (e.g., meta-llama/Llama-3.1-8B-Instruct)
             config: Path to study config YAML file
             preset: Optimization preset (high_throughput, low_latency, balanced, cost_optimized)
             backend: Execution backend (local, ray)
@@ -610,7 +610,7 @@ class CLI:
         requirements to suggest optimal vLLM serving parameters.
 
         Args:
-            model: HuggingFace model ID (e.g. meta-llama/Llama-3-8B-Instruct)
+            model: HuggingFace model ID (e.g. meta-llama/Llama-3.1-8B-Instruct)
             vram: Total GPU VRAM in GB per GPU (default: 24.0)
             num_gpus: Number of GPUs available (default: 1)
 

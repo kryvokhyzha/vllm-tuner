@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vllm-tuner"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Python package for tuning vLLM hyperparameters."
 readme = "README.md"
 authors = [
@@ -40,8 +40,7 @@ dependencies = [
     # Other dependencies
     "pandas ~= 3.0.0",
     "pyyaml >= 6.0",
-    "huggingface_hub[hf_xet] ~= 1.7.1",
-    "datasets ~= 4.7.0",
+    "huggingface_hub[hf_xet]",
 ]
 
 [project.optional-dependencies]

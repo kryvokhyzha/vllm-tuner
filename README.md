@@ -236,7 +236,7 @@ python -m vllm_tuner.cli.main run --config configs/low_latency_gpu.yaml --model 
 
 ```bash
 python -m vllm_tuner.cli.main run \
-    --model "meta-llama/Llama-3-8B-Instruct" \
+    --model "meta-llama/Llama-3.1-8B-Instruct" \
     --preset low_latency \
     --n_trials 30 \
     --output_dir ./results
@@ -274,7 +274,7 @@ python -m vllm_tuner.cli.main report --study_name my-study --output_dir ./result
 python -m vllm_tuner.cli.main export --study_name my-study --format yaml --output best.yaml
 
 # Recommend vLLM parameters based on model and hardware
-python -m vllm_tuner.cli.main recommend --model "meta-llama/Llama-3-8B-Instruct" --vram 24 --num_gpus 1
+python -m vllm_tuner.cli.main recommend --model "meta-llama/Llama-3.1-8B-Instruct" --vram 24 --num_gpus 1
 
 # List available presets, backends, or benchmark providers
 python -m vllm_tuner.cli.main list --what presets

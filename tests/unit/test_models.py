@@ -147,7 +147,7 @@ class TestConfigModels:
 
     def test_study_config_full(self):
         config = StudyConfig(
-            model="meta-llama/Llama-3-8B-Instruct",
+            model="meta-llama/Llama-3.1-8B-Instruct",
             optimization=OptimizationConfig(n_trials=100, sampler=SamplerType.NSGA2),
             execution=ExecutionConfig(backend=BackendType.RAY, ray_address="ray://head:10001"),
             parameters=[

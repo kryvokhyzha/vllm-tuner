@@ -1,6 +1,6 @@
 # Balanced tuning (throughput + latency) — single GPU
 # Usage: python -m vllm_tuner.cli.main run --config configs/balanced_gpu.yaml
-model: "meta-llama/Llama-3-8B-Instruct"
+model: "meta-llama/Llama-3.1-8B-Instruct"
 
 study:
   name: balanced-study

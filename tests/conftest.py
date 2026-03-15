@@ -47,7 +47,7 @@ def sample_trial_result(sample_trial_config, sample_benchmark_result):
 
 @pytest.fixture
 def sample_study_config():
-    return StudyConfig(model="meta-llama/Llama-3-8B-Instruct")
+    return StudyConfig(model="meta-llama/Llama-3.1-8B-Instruct")
 
 
 @pytest.fixture
