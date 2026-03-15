@@ -25,7 +25,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          uv sync --no-extras
+          uv sync --no-extra gpu --no-extra guidellm --no-extra http --no-extra ray
           uv pip install build twine
 
       - name: Build and publish
