@@ -12,6 +12,7 @@ Provides a btop-style full-screen terminal UI with:
 from __future__ import annotations
 
 import shutil
+import threading
 import time
 from contextlib import contextmanager
 from typing import Any
@@ -109,10 +110,22 @@ class LiveDashboard:
         suppress_console()
         try:
             with self._live:
+                self._start_tick_thread()
                 yield self
         finally:
             self._live = None
             restore_console()
+
+    def _start_tick_thread(self) -> None:
+        """Start background thread that refreshes the display every second for the live timer."""
+
+        def _tick() -> None:
+            while self._live is not None:
+                time.sleep(1)
+                self._refresh()
+
+        t = threading.Thread(target=_tick, daemon=True)
+        t.start()
 
     def _refresh(self) -> None:
         if self._live is not None:
