@@ -2,9 +2,9 @@
 
 |            |                                                                                                                       |
 | ---------- | --------------------------------------------------------------------------------------------------------------------- |
-| CI/Testing | -                                                                                                                     |
-| Package    | [![Python](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/release/python-3113/) |
-| Meta       | [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)      |
+| CI/Testing | [![build status](https://github.com/kryvokhyzha/vllm-tuner/actions/workflows/test.yml/badge.svg)](https://github.com/kryvokhyzha/vllm-tuner/actions/workflows/test.yml) [![codecov](https://codecov.io/gh/kryvokhyzha/vllm-tuner/graph/badge.svg?token=pgGcMXy7Ws)](https://codecov.io/gh/kryvokhyzha/vllm-tuner) |
+| Package    | [![PyPI version](https://img.shields.io/pypi/v/vllm-tuner.svg)](https://pypi.org/project/vllm-tuner/) [![PyPI Downloads](https://img.shields.io/pypi/dm/vllm-tuner.svg)](https://pypi.org/project/vllm-tuner/) [![Python Version](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fkryvokhyzha%2Fvllm-tuner%2Fmain%2Fpyproject.toml)](https://github.com/kryvokhyzha/vllm-tuner/blob/main/pyproject.toml)    |
+| Meta       | [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![GitHub License](https://img.shields.io/github/license/kryvokhyzha/vllm-tuner)](https://github.com/kryvokhyzha/vllm-tuner/blob/main/LICENSE)
 
 ## 📖 About
 
