@@ -67,6 +67,7 @@ lint = [
 ]
 test = [
     "pytest",
+    "pytest-cov",
     "pytest-env",
 ]
 
