@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
@@ -12,6 +14,16 @@ logger = get_logger()
 
 
 # ──────────────────────────────────────
+# Device type
+# ──────────────────────────────────────
+
+
+class DeviceType(StrEnum):
+    GPU = "gpu"
+    TPU = "tpu"
+
+
+# ──────────────────────────────────────
 # Result model
 # ──────────────────────────────────────
 
@@ -19,6 +31,7 @@ logger = get_logger()
 class ModelAnalysis(BaseModel):
     """Result of analyzing a model's resource requirements."""
 
+    device: DeviceType = DeviceType.GPU
     model_id: str = ""
     param_count: int = 0
     bytes_per_param: float = 2.0
@@ -47,6 +60,9 @@ class ModelAnalysis(BaseModel):
     cpu_offload_gb: float = 0.0
     dtype: str = "auto"
 
+    # TPU-specific
+    tpu_chip: str | None = None  # e.g. "v6e"
+
     # vLLM 0.17+ flags (set via --performance-mode, --scheduling-policy, etc.)
     # performance_mode: str = "auto"  # "balanced" | "interactivity" | "throughput" (vLLM 0.17+, PR #34936)
     # scheduling_policy: str = "fcfs"  # "fcfs" | "priority"
@@ -55,6 +71,28 @@ class ModelAnalysis(BaseModel):
 
     can_fit: bool = True
     warnings: list[str] = []
+
+
+# ──────────────────────────────────────
+# TPU chip specifications
+# ──────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class TPUChipSpec:
+    """Hardware specification for a TPU chip type."""
+
+    name: str
+    hbm_gb: float  # HBM per chip
+    chips_per_host: int  # typical chips per host
+
+
+TPU_CHIPS: dict[str, TPUChipSpec] = {
+    "v4": TPUChipSpec(name="v4", hbm_gb=32.0, chips_per_host=4),
+    "v5p": TPUChipSpec(name="v5p", hbm_gb=95.0, chips_per_host=4),
+    "v5e": TPUChipSpec(name="v5e", hbm_gb=16.0, chips_per_host=8),
+    "v6e": TPUChipSpec(name="v6e", hbm_gb=32.0, chips_per_host=8),
+}
 
 
 # ──────────────────────────────────────
@@ -370,6 +408,7 @@ def analyze_model(
         warnings.append("Chunked prefill disabled due to limited VRAM")
 
     analysis = ModelAnalysis(
+        device=DeviceType.GPU,
         model_id=model_id,
         param_count=param_count,
         bytes_per_param=bytes_per_param,
@@ -416,6 +455,182 @@ def analyze_model(
         enable_prefix_caching,
         kv_cache_dtype,
         can_fit_with_offload,
+    )
+
+    return analysis
+
+
+def analyze_model_tpu(
+    config: dict[str, Any],
+    chip_type: str,
+    num_chips: int = 0,
+    model_id: str = "",
+) -> ModelAnalysis:
+    """Analyze model resource requirements for TPU and recommend vLLM parameters.
+
+    Args:
+        config: Parsed HuggingFace ``config.json``.
+        chip_type: TPU chip type (v4, v5p, v5e, v6e).
+        num_chips: Number of TPU chips. Defaults to chips_per_host for the chip type.
+        model_id: Optional model identifier (for GGUF quantization detection).
+
+    Returns:
+        ``ModelAnalysis`` with recommended TPU parameters and warnings.
+
+    Raises:
+        ValueError: If *chip_type* is not recognised.
+
+    """
+    chip_type = chip_type.lower()
+    if chip_type not in TPU_CHIPS:
+        valid = ", ".join(sorted(TPU_CHIPS))
+        raise ValueError(f"Unknown TPU chip type '{chip_type}'. Valid types: {valid}")
+
+    chip = TPU_CHIPS[chip_type]
+    if num_chips <= 0:
+        num_chips = chip.chips_per_host
+
+    warnings: list[str] = []
+
+    # Flatten multimodal configs
+    config = _resolve_text_config(config)
+
+    # Quantization
+    is_quantized, quant_method, bytes_per_param = _detect_quantization(config, model_id)
+
+    # TPU only supports bfloat16; quantized models will still load but
+    # the parameter bytes stay as detected for weight-size estimation.
+    if is_quantized:
+        warnings.append(
+            "Quantized models have limited support on TPU; consider using a non-quantized bfloat16 checkpoint"
+        )
+
+    # Parameters
+    param_count = _estimate_param_count(config)
+    weights_gb = param_count * bytes_per_param / (1024**3)
+
+    # MoE detection
+    num_experts = config.get("num_local_experts", 1)
+    is_moe = num_experts > 1
+
+    # Memory budget
+    per_chip_hbm = chip.hbm_gb
+    total_hbm = per_chip_hbm * num_chips
+    hidden_size = config.get("hidden_size", 4096)
+    num_layers = config.get("num_hidden_layers", 32)
+    activation_gb = max(0.3, hidden_size * num_layers / (1024**3) * 2)
+
+    # ── TP must match chips-per-host (or be a valid power-of-2 divisor) ──
+    tp = 1
+    if weights_gb > per_chip_hbm * 0.80:
+        raw_tp = weights_gb / (per_chip_hbm * 0.70)
+        tp = 1
+        while tp < raw_tp:
+            tp *= 2
+        tp = min(tp, num_chips)
+
+    # DP: remaining chips after TP
+    dp = num_chips // tp
+
+    per_chip_weights = weights_gb / tp
+
+    # KV cache budget → max_model_len
+    kv_per_token = _estimate_kv_cache_per_token_gb(config)
+    # Reserve ~15% HBM for runtime overhead on TPU
+    available_for_kv = per_chip_hbm * 0.85 - per_chip_weights - activation_gb
+    if kv_per_token > 0 and available_for_kv > 0:
+        max_model_len = int(available_for_kv / kv_per_token)
+    else:
+        max_model_len = 512
+
+    model_max_len = config.get("max_position_embeddings")
+    if model_max_len:
+        max_model_len = min(max_model_len, model_max_len)
+    max_model_len = max(512, min(max_model_len, 131072))
+
+    # max_num_seqs — TPUs have high memory bandwidth, lean towards higher concurrency
+    if per_chip_hbm >= 80:
+        max_num_seqs = 64
+    elif per_chip_hbm >= 32:
+        max_num_seqs = 32
+    else:
+        max_num_seqs = 16
+
+    # max_num_batched_tokens
+    if per_chip_hbm >= 80:
+        max_num_batched_tokens = 8192
+    elif per_chip_hbm >= 32:
+        max_num_batched_tokens = 4096
+    else:
+        max_num_batched_tokens = 2048
+
+    # Can it fit?
+    can_fit = per_chip_weights + activation_gb < per_chip_hbm * 0.85
+
+    # Block size
+    block_size = 32 if max_model_len >= 32768 else 16
+
+    if not can_fit:
+        warnings.append(
+            f"Model weights ({weights_gb:.1f} GB) + activations ({activation_gb:.1f} GB) "
+            f"may exceed available HBM ({total_hbm:.1f} GB across {num_chips} chip(s))"
+        )
+        if num_chips < chip.chips_per_host:
+            warnings.append(f"Consider using all {chip.chips_per_host} chips per host for tensor parallelism")
+
+    if dp > 1:
+        warnings.append(f"Model fits on {tp} chip(s); using data parallelism (DP={dp}) for throughput")
+
+    if is_moe:
+        warnings.append("MoE expert parallelism is not yet supported on TPU by vLLM")
+
+    analysis = ModelAnalysis(
+        device=DeviceType.TPU,
+        model_id=model_id,
+        param_count=param_count,
+        bytes_per_param=bytes_per_param,
+        weights_memory_gb=round(weights_gb, 2),
+        is_quantized=is_quantized,
+        quant_method=quant_method,
+        is_moe=is_moe,
+        num_experts=num_experts,
+        # TPU-specific defaults for GPU-only fields
+        gpu_memory_utilization=0.0,
+        enforce_eager=False,
+        swap_space=0.0,
+        kv_cache_dtype="auto",
+        cpu_offload_gb=0.0,
+        # Shared fields
+        max_model_len=max_model_len,
+        tensor_parallel_size=tp,
+        data_parallel_size=dp,
+        expert_parallel_size=1,
+        pipeline_parallel_size=1,
+        max_num_seqs=max_num_seqs,
+        max_num_batched_tokens=max_num_batched_tokens,
+        enable_chunked_prefill=True,
+        enable_prefix_caching=True,
+        enable_expert_parallel=False,
+        block_size=block_size,
+        dtype="bfloat16",
+        tpu_chip=chip_type,
+        can_fit=can_fit,
+        warnings=warnings,
+    )
+
+    logger.info(
+        "TPU analysis for '{}': chip={}, chips={}, weights={:.1f}GB, quantized={}, tp={}, dp={}, "
+        "max_model_len={}, max_num_batched_tokens={}, can_fit={}",
+        model_id or "unknown",
+        chip_type,
+        num_chips,
+        weights_gb,
+        is_quantized,
+        tp,
+        dp,
+        max_model_len,
+        max_num_batched_tokens,
+        can_fit,
     )
 
     return analysis

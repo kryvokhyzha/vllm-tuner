@@ -3,12 +3,15 @@ from __future__ import annotations
 import pytest
 
 from vllm_tuner.utils.model_analyzer import (
+    TPU_CHIPS,
+    DeviceType,
     ModelAnalysis,
     _detect_quantization,
     _estimate_kv_cache_per_token_gb,
     _estimate_param_count,
     _resolve_text_config,
     analyze_model,
+    analyze_model_tpu,
 )
 
 
@@ -394,3 +397,122 @@ class TestNewVllmParameters:
         assert r_24gb.max_num_batched_tokens == 2048
         assert r_48gb.max_num_batched_tokens == 4096
         assert r_80gb.max_num_batched_tokens == 8192
+
+
+# ──────────────────────────────────────
+# TPU analysis
+# ──────────────────────────────────────
+
+
+class TestTPUChipSpecs:
+    def test_all_chips_have_positive_hbm(self):
+        for name, chip in TPU_CHIPS.items():
+            assert chip.hbm_gb > 0, f"{name} HBM should be positive"
+            assert chip.chips_per_host > 0, f"{name} chips_per_host should be positive"
+
+    def test_known_chip_types(self):
+        assert set(TPU_CHIPS) == {"v4", "v5p", "v5e", "v6e"}
+
+
+class TestAnalyzeModelTPU:
+    def test_basic_v6e(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v6e")
+        assert isinstance(result, ModelAnalysis)
+        assert result.device == DeviceType.TPU
+        assert result.tpu_chip == "v6e"
+        assert result.dtype == "bfloat16"
+        assert result.can_fit is True
+
+    def test_device_field_set(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v5p")
+        assert result.device == DeviceType.TPU
+
+    def test_gpu_only_fields_zeroed(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v6e")
+        assert result.gpu_memory_utilization == 0.0
+        assert result.enforce_eager is False
+        assert result.swap_space == 0.0
+        assert result.cpu_offload_gb == 0.0
+
+    def test_dtype_always_bfloat16(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v4")
+        assert result.dtype == "bfloat16"
+
+    def test_default_num_chips_from_spec(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v6e")
+        # v6e has 8 chips per host; model fits on 1, so TP=1, DP=8
+        assert result.tensor_parallel_size * result.data_parallel_size == TPU_CHIPS["v6e"].chips_per_host
+
+    def test_custom_num_chips(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v6e", num_chips=4)
+        assert result.tensor_parallel_size * result.data_parallel_size == 4
+
+    def test_v5e_small_hbm_8b_model(self):
+        # v5e has only 16GB HBM — 8B FP16 model (~16GB) is very tight
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v5e")
+        assert result.tensor_parallel_size >= 1
+
+    def test_v5p_large_hbm_8b_fits(self):
+        # v5p has 95GB HBM — 8B model fits easily
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v5p")
+        assert result.can_fit is True
+        assert result.tensor_parallel_size == 1
+
+    def test_tp_power_of_two(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v5e", num_chips=8)
+        tp = result.tensor_parallel_size
+        assert tp & (tp - 1) == 0, f"TP={tp} is not a power of 2"
+
+    def test_max_model_len_capped(self):
+        config = {**LLAMA_8B_CONFIG, "max_position_embeddings": 2048}
+        result = analyze_model_tpu(config, chip_type="v5p")
+        assert result.max_model_len <= 2048
+
+    def test_model_id_stored(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v6e", model_id="meta-llama/Llama-3-8B")
+        assert result.model_id == "meta-llama/Llama-3-8B"
+
+    def test_quantized_model_warns(self):
+        config = {**LLAMA_8B_CONFIG, "quantization_config": {"quant_method": "awq", "bits": 4}}
+        result = analyze_model_tpu(config, chip_type="v6e")
+        assert result.is_quantized is True
+        assert any("quantized" in w.lower() for w in result.warnings)
+
+    def test_moe_model_warns(self):
+        moe_config = {
+            "hidden_size": 2880,
+            "num_hidden_layers": 36,
+            "num_attention_heads": 64,
+            "num_key_value_heads": 8,
+            "head_dim": 64,
+            "vocab_size": 201088,
+            "intermediate_size": 2880,
+            "num_local_experts": 128,
+            "max_position_embeddings": 131072,
+        }
+        result = analyze_model_tpu(moe_config, chip_type="v5p", num_chips=4)
+        assert result.is_moe is True
+        assert any("moe" in w.lower() for w in result.warnings)
+
+    def test_invalid_chip_type_raises(self):
+        with pytest.raises(ValueError, match="Unknown TPU chip type"):
+            analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v99")
+
+    def test_case_insensitive_chip_type(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="V6E")
+        assert result.tpu_chip == "v6e"
+
+    def test_block_size_32_for_long_context(self):
+        config = {**LLAMA_8B_CONFIG, "max_position_embeddings": 131072}
+        result = analyze_model_tpu(config, chip_type="v5p")
+        assert result.block_size == 32
+
+    def test_kv_cache_dtype_always_auto(self):
+        result = analyze_model_tpu(LLAMA_8B_CONFIG, chip_type="v5p")
+        assert result.kv_cache_dtype == "auto"
+
+    def test_gpu_analysis_still_works(self):
+        """Ensure GPU analysis is unaffected by TPU additions."""
+        result = analyze_model(LLAMA_8B_CONFIG, total_vram_gb=80.0, num_gpus=1)
+        assert result.device == DeviceType.GPU
+        assert result.tpu_chip is None

@@ -273,8 +273,14 @@ python -m vllm_tuner.cli.main report --study_name my-study --output_dir ./result
 # Export the best config as YAML (also supports --helm for Helm values)
 python -m vllm_tuner.cli.main export --study_name my-study --format yaml --output best.yaml
 
-# Recommend vLLM parameters based on model and hardware
+# Recommend vLLM parameters based on model and hardware (GPU)
 python -m vllm_tuner.cli.main recommend --model "meta-llama/Llama-3.1-8B-Instruct" --vram 24 --num_gpus 1
+
+# Recommend vLLM parameters for TPU (v6e, 8 chips per host by default)
+python -m vllm_tuner.cli.main recommend --model "meta-llama/Llama-3.1-8B-Instruct" --device tpu --chip_type v6e
+
+# Recommend for a specific number of TPU chips
+python -m vllm_tuner.cli.main recommend --model "meta-llama/Llama-3.1-70B-Instruct" --device tpu --chip_type v5p --num_chips 8
 
 # List available presets, backends, or benchmark providers
 python -m vllm_tuner.cli.main list --what presets

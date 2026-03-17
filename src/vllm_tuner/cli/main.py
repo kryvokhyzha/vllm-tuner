@@ -603,6 +603,9 @@ class CLI:
         model: str,
         vram: float = 24.0,
         num_gpus: int = 1,
+        device: str = "gpu",
+        chip_type: str = "v6e",
+        num_chips: int = 0,
     ) -> None:
         """Recommend vLLM parameters for a model based on available hardware.
 
@@ -611,8 +614,11 @@ class CLI:
 
         Args:
             model: HuggingFace model ID (e.g. meta-llama/Llama-3.1-8B-Instruct)
-            vram: Total GPU VRAM in GB per GPU (default: 24.0)
-            num_gpus: Number of GPUs available (default: 1)
+            vram: Total GPU VRAM in GB per GPU (default: 24.0, GPU only)
+            num_gpus: Number of GPUs available (default: 1, GPU only)
+            device: Device type — "gpu" or "tpu" (default: "gpu")
+            chip_type: TPU chip type — v4, v5p, v5e, v6e (default: "v6e", TPU only)
+            num_chips: Number of TPU chips (default: chips_per_host for chip type, TPU only)
 
         """
         from rich.syntax import Syntax
@@ -627,12 +633,30 @@ class CLI:
             print_info,
             print_warning,
         )
-        from vllm_tuner.utils.model_analyzer import analyze_model
+        from vllm_tuner.utils.model_analyzer import TPU_CHIPS, DeviceType, analyze_model, analyze_model_tpu
         from vllm_tuner.utils.model_registry import get_model_config
+
+        try:
+            device_type = DeviceType(device.lower())
+        except ValueError:
+            print_error(f"Invalid device '{device}'. Use 'gpu' or 'tpu'.")
+            return
 
         print_header("vLLM Tuner — Model Recommendation", f"[cyan]{model}[/cyan]")
 
-        print_info("Hardware", f"{num_gpus}× GPU with {vram:.0f} GB VRAM each")
+        if device_type is DeviceType.TPU:
+            chip_type = chip_type.lower()
+            if chip_type not in TPU_CHIPS:
+                print_error(f"Unknown TPU chip type '{chip_type}'. Valid types: {', '.join(sorted(TPU_CHIPS))}")
+                return
+            chip = TPU_CHIPS[chip_type]
+            effective_chips = num_chips if num_chips > 0 else chip.chips_per_host
+            print_info(
+                "Hardware",
+                f"{effective_chips}× TPU {chip_type} with {chip.hbm_gb:.0f} GB HBM each",
+            )
+        else:
+            print_info("Hardware", f"{num_gpus}× GPU with {vram:.0f} GB VRAM each")
 
         try:
             config = get_model_config(model)
@@ -640,8 +664,11 @@ class CLI:
             print_error(str(exc))
             return
 
-        total_vram = vram * num_gpus
-        analysis = analyze_model(config, total_vram_gb=total_vram, num_gpus=num_gpus, model_id=model)
+        if device_type is DeviceType.TPU:
+            analysis = analyze_model_tpu(config, chip_type=chip_type, num_chips=num_chips, model_id=model)
+        else:
+            total_vram = vram * num_gpus
+            analysis = analyze_model(config, total_vram_gb=total_vram, num_gpus=num_gpus, model_id=model)
 
         console.print()
 
@@ -653,8 +680,9 @@ class CLI:
         ]
         if analysis.is_moe:
             analysis_rows.append(["Architecture", f"MoE ({analysis.num_experts} experts)"])
+        fit_label = "Can fit in HBM" if device_type is DeviceType.TPU else "Can fit in VRAM"
         fit_text = Text("Yes", style="green") if analysis.can_fit else Text("No", style="red")
-        analysis_rows.append(["Can fit in VRAM", fit_text])
+        analysis_rows.append([fit_label, fit_text])
 
         table = make_table(
             "Model Analysis",
@@ -668,39 +696,52 @@ class CLI:
         console.print()
 
         # Recommended parameters table
-        param_rows: list[list[str]] = [
-            ["--dtype", analysis.dtype],
-            ["--gpu-memory-utilization", str(analysis.gpu_memory_utilization)],
-            ["--max-model-len", str(analysis.max_model_len)],
-            ["--max-num-seqs", str(analysis.max_num_seqs)],
-            ["--max-num-batched-tokens", str(analysis.max_num_batched_tokens)],
-            ["--tensor-parallel-size", str(analysis.tensor_parallel_size)],
-        ]
-        if analysis.data_parallel_size > 1:
-            param_rows.append(["--data-parallel-size", str(analysis.data_parallel_size)])
-        if analysis.pipeline_parallel_size > 1:
-            param_rows.append(["--pipeline-parallel-size", str(analysis.pipeline_parallel_size)])
-        if analysis.enable_expert_parallel:
-            param_rows.append(["--enable-expert-parallel", ""])
-        param_rows.append(
-            [
-                "--enable-chunked-prefill" if analysis.enable_chunked_prefill else "--no-enable-chunked-prefill",
-                "",
+        if device_type is DeviceType.TPU:
+            param_rows: list[list[str]] = [
+                ["--device", "tpu"],
+                ["--dtype", analysis.dtype],
+                ["--max-model-len", str(analysis.max_model_len)],
+                ["--max-num-seqs", str(analysis.max_num_seqs)],
+                ["--max-num-batched-tokens", str(analysis.max_num_batched_tokens)],
+                ["--tensor-parallel-size", str(analysis.tensor_parallel_size)],
             ]
-        )
-        param_rows.append(
-            [
-                "--enable-prefix-caching" if analysis.enable_prefix_caching else "--no-enable-prefix-caching",
-                "",
+            if analysis.data_parallel_size > 1:
+                param_rows.append(["--data-parallel-size", str(analysis.data_parallel_size)])
+            param_rows.append(["--block-size", str(analysis.block_size)])
+        else:
+            param_rows = [
+                ["--dtype", analysis.dtype],
+                ["--gpu-memory-utilization", str(analysis.gpu_memory_utilization)],
+                ["--max-model-len", str(analysis.max_model_len)],
+                ["--max-num-seqs", str(analysis.max_num_seqs)],
+                ["--max-num-batched-tokens", str(analysis.max_num_batched_tokens)],
+                ["--tensor-parallel-size", str(analysis.tensor_parallel_size)],
             ]
-        )
-        param_rows.append(["--kv-cache-dtype", analysis.kv_cache_dtype])
-        param_rows.append(["--block-size", str(analysis.block_size)])
-        param_rows.append(["--swap-space", str(analysis.swap_space)])
-        if analysis.cpu_offload_gb > 0:
-            param_rows.append(["--cpu-offload-gb", str(analysis.cpu_offload_gb)])
-        if analysis.enforce_eager:
-            param_rows.append(["--enforce-eager", ""])
+            if analysis.data_parallel_size > 1:
+                param_rows.append(["--data-parallel-size", str(analysis.data_parallel_size)])
+            if analysis.pipeline_parallel_size > 1:
+                param_rows.append(["--pipeline-parallel-size", str(analysis.pipeline_parallel_size)])
+            if analysis.enable_expert_parallel:
+                param_rows.append(["--enable-expert-parallel", ""])
+            param_rows.append(
+                [
+                    "--enable-chunked-prefill" if analysis.enable_chunked_prefill else "--no-enable-chunked-prefill",
+                    "",
+                ]
+            )
+            param_rows.append(
+                [
+                    "--enable-prefix-caching" if analysis.enable_prefix_caching else "--no-enable-prefix-caching",
+                    "",
+                ]
+            )
+            param_rows.append(["--kv-cache-dtype", analysis.kv_cache_dtype])
+            param_rows.append(["--block-size", str(analysis.block_size)])
+            param_rows.append(["--swap-space", str(analysis.swap_space)])
+            if analysis.cpu_offload_gb > 0:
+                param_rows.append(["--cpu-offload-gb", str(analysis.cpu_offload_gb)])
+            if analysis.enforce_eager:
+                param_rows.append(["--enforce-eager", ""])
 
         params_table = make_table(
             "Recommended vLLM Parameters",
@@ -714,37 +755,52 @@ class CLI:
         console.print()
 
         # Build command
-        cmd_parts = [
-            "vllm serve",
-            model,
-            f"--dtype {analysis.dtype}",
-            f"--gpu-memory-utilization {analysis.gpu_memory_utilization}",
-            f"--max-model-len {analysis.max_model_len}",
-            f"--max-num-seqs {analysis.max_num_seqs}",
-            f"--max-num-batched-tokens {analysis.max_num_batched_tokens}",
-            f"--tensor-parallel-size {analysis.tensor_parallel_size}",
-        ]
-        if analysis.data_parallel_size > 1:
-            cmd_parts.append(f"--data-parallel-size {analysis.data_parallel_size}")
-        if analysis.pipeline_parallel_size > 1:
-            cmd_parts.append(f"--pipeline-parallel-size {analysis.pipeline_parallel_size}")
-        if analysis.enable_expert_parallel:
-            cmd_parts.append("--enable-expert-parallel")
-        if analysis.enable_chunked_prefill:
-            cmd_parts.append("--enable-chunked-prefill")
+        if device_type is DeviceType.TPU:
+            cmd_parts = [
+                "vllm serve",
+                model,
+                "--device tpu",
+                f"--dtype {analysis.dtype}",
+                f"--max-model-len {analysis.max_model_len}",
+                f"--max-num-seqs {analysis.max_num_seqs}",
+                f"--max-num-batched-tokens {analysis.max_num_batched_tokens}",
+                f"--tensor-parallel-size {analysis.tensor_parallel_size}",
+            ]
+            if analysis.data_parallel_size > 1:
+                cmd_parts.append(f"--data-parallel-size {analysis.data_parallel_size}")
+            cmd_parts.append(f"--block-size {analysis.block_size}")
         else:
-            cmd_parts.append("--no-enable-chunked-prefill")
-        if analysis.enable_prefix_caching:
-            cmd_parts.append("--enable-prefix-caching")
-        else:
-            cmd_parts.append("--no-enable-prefix-caching")
-        cmd_parts.append(f"--kv-cache-dtype {analysis.kv_cache_dtype}")
-        cmd_parts.append(f"--block-size {analysis.block_size}")
-        cmd_parts.append(f"--swap-space {analysis.swap_space}")
-        if analysis.cpu_offload_gb > 0:
-            cmd_parts.append(f"--cpu-offload-gb {analysis.cpu_offload_gb}")
-        if analysis.enforce_eager:
-            cmd_parts.append("--enforce-eager")
+            cmd_parts = [
+                "vllm serve",
+                model,
+                f"--dtype {analysis.dtype}",
+                f"--gpu-memory-utilization {analysis.gpu_memory_utilization}",
+                f"--max-model-len {analysis.max_model_len}",
+                f"--max-num-seqs {analysis.max_num_seqs}",
+                f"--max-num-batched-tokens {analysis.max_num_batched_tokens}",
+                f"--tensor-parallel-size {analysis.tensor_parallel_size}",
+            ]
+            if analysis.data_parallel_size > 1:
+                cmd_parts.append(f"--data-parallel-size {analysis.data_parallel_size}")
+            if analysis.pipeline_parallel_size > 1:
+                cmd_parts.append(f"--pipeline-parallel-size {analysis.pipeline_parallel_size}")
+            if analysis.enable_expert_parallel:
+                cmd_parts.append("--enable-expert-parallel")
+            if analysis.enable_chunked_prefill:
+                cmd_parts.append("--enable-chunked-prefill")
+            else:
+                cmd_parts.append("--no-enable-chunked-prefill")
+            if analysis.enable_prefix_caching:
+                cmd_parts.append("--enable-prefix-caching")
+            else:
+                cmd_parts.append("--no-enable-prefix-caching")
+            cmd_parts.append(f"--kv-cache-dtype {analysis.kv_cache_dtype}")
+            cmd_parts.append(f"--block-size {analysis.block_size}")
+            cmd_parts.append(f"--swap-space {analysis.swap_space}")
+            if analysis.cpu_offload_gb > 0:
+                cmd_parts.append(f"--cpu-offload-gb {analysis.cpu_offload_gb}")
+            if analysis.enforce_eager:
+                cmd_parts.append("--enforce-eager")
 
         cmd_str = " \\\n    ".join(cmd_parts)
         console.print(
