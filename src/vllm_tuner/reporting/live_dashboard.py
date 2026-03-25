@@ -68,7 +68,7 @@ class LiveDashboard:
 
     def __init__(self, study_config: StudyConfig):
         self._config = study_config
-        self._console = Console()
+        self._console = Console(force_terminal=True)
         self._live: Live | None = None
 
         # State
@@ -100,12 +100,13 @@ class LiveDashboard:
         from vllm_tuner.helper.logging import restore_console, suppress_console
 
         self._start_time = time.monotonic()
+        is_interactive = self._console.is_terminal
         self._live = Live(
             self._build_layout(),
             console=self._console,
             refresh_per_second=_REFRESH_RATE,
-            screen=True,  # alternate screen buffer (like btop)
-            transient=True,  # clear when exiting
+            screen=is_interactive,
+            transient=is_interactive,
         )
         suppress_console()
         try:

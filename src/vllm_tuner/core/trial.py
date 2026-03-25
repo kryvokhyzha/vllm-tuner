@@ -87,14 +87,33 @@ class TrialRunner:
             # Step 2: Wait for server readiness
             logger.info("Trial #{}: waiting for server readiness", trial_num)
             if not self._launcher.wait_until_ready(timeout=self._startup_timeout):
-                if self._dashboard:
-                    logs = self._launcher.read_logs()
-                    error_line = logs[-1] if logs else "Unknown error"
-                    self._dashboard.on_server_failed(error_line)
-                # Check for OOM in logs
                 logs = self._launcher.read_logs()
                 telemetry = self._telemetry_parser.parse_logs(logs)
-                error = "OOM detected during startup" if telemetry.oom_detected else "Server failed to start"
+
+                tail_lines = logs[-20:] if logs else []
+                error_lines = [
+                    line
+                    for line in tail_lines
+                    if any(kw in line.lower() for kw in ("error", "exception", "fatal", "failed", "traceback"))
+                ]
+                last_error = (
+                    error_lines[-1].strip()
+                    if error_lines
+                    else (tail_lines[-1].strip() if tail_lines else "No server logs captured")
+                )
+
+                if telemetry.oom_detected:
+                    error = f"OOM detected during startup: {last_error}"
+                else:
+                    error = f"Server failed to start: {last_error}"
+
+                logger.error(
+                    "Trial #{}: {} | Last {} log lines:\n{}", trial_num, error, len(tail_lines), "\n".join(tail_lines)
+                )
+
+                if self._dashboard:
+                    self._dashboard.on_server_failed(last_error)
+
                 return TrialResult(
                     trial_number=trial_num,
                     status=TrialStatus.FAILED,

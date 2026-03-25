@@ -22,7 +22,7 @@ class SQLiteStorage(StorageBackend):
     def __init__(self, db_path: str = "study.db"):
         self._db_path = Path(db_path)
         self._sidecar_dir = self._db_path.parent / f"{self._db_path.stem}_data"
-        logger.info("SQLiteStorage initialized: {} (sidecar: {})", self._db_path, self._sidecar_dir)
+        logger.info("SQLiteStorage initialized: {}", self._db_path)
 
     def get_storage_url(self) -> str:
         return f"sqlite:///{self._db_path}"

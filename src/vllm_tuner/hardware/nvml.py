@@ -25,7 +25,6 @@ class NVMLMonitor(HardwareMonitor):
     """
 
     def __init__(self, device_ids: list[int] | None = None):
-        self._device_ids = device_ids or [0]
         self._collecting = False
         self._samples: list[HardwareStats] = []
         self._thread: threading.Thread | None = None
@@ -36,10 +35,17 @@ class NVMLMonitor(HardwareMonitor):
             try:
                 pynvml.nvmlInit()
                 self._initialized = True
+                if device_ids is not None:
+                    self._device_ids = device_ids
+                else:
+                    count = pynvml.nvmlDeviceGetCount()
+                    self._device_ids = list(range(count))
                 logger.info("NVMLMonitor initialized for devices: {}", self._device_ids)
             except pynvml.NVMLError as e:
+                self._device_ids = device_ids or [0]
                 logger.warning("Failed to initialize NVML: {} — GPU monitoring disabled", e)
         else:
+            self._device_ids = device_ids or [0]
             logger.warning("pynvml not installed — GPU monitoring disabled. Install: pip install 'llm-vllm-tuner[gpu]'")
 
     def start_collection(self, interval_seconds: float = 1.0) -> None:
