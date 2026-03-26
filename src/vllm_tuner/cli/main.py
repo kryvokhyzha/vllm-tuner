@@ -199,7 +199,13 @@ class CLI:
         if results:
             from vllm_tuner.reporting.html import HTMLReportGenerator
 
-            HTMLReportGenerator().generate(results, out_dir, study_config.study.name, baseline=baseline_result)
+            HTMLReportGenerator().generate(
+                results,
+                out_dir,
+                study_config.study.name,
+                baseline=baseline_result,
+                objectives=study_config.optimization.objectives,
+            )
             logger.info("Results saved to {}", out_dir)
 
     def resume(

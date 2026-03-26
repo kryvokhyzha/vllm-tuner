@@ -35,25 +35,34 @@ parameters:
     min: 2
     max: 8
     step: 2
-# ── vLLM 0.17+ flags (uncomment to include in search) ──
-# --performance-mode: "balanced" | "interactivity" | "throughput" (PR #34936)
-# Automatically adjusts max_num_batched_tokens and max_num_seqs.
-# Using "throughput" here doubles batch defaults — may conflict with explicit tuning above.
+# ── vLLM 0.17.1 parameters ──
+# --performance-mode: runtime behavior preset (adjusts batching, CUDA graphs)
+#   WARNING: may conflict with explicit max_num_batched_tokens / max_num_seqs above
 #  - name: performance_mode
 #    options: ["throughput", "balanced"]
-#
+
 # --scheduling-policy: request scheduling algorithm
 #  - name: scheduling_policy
 #    options: ["fcfs", "priority"]
-#
-# --max-num-partial-prefills: concurrent partial prefills (Hopper+)
+
+# --max-num-partial-prefills: concurrent partial prefills (chunked prefill, Hopper+)
 #  - name: max_num_partial_prefills
 #    min: 1
 #    max: 4
 #    step: 1
-#
-# --num-gpu-blocks-override: manually set KV cache blocks
-#  - name: num_gpu_blocks_override
-#    min: 256
+
+# --long-prefill-token-threshold: prompts above this are "long" for scheduling
+#  - name: long_prefill_token_threshold
+#    min: 0
 #    max: 4096
-#    step: 256
+#    step: 512
+
+# --cpu-offload-gb: offload model weights to CPU (extends effective GPU memory)
+#  - name: cpu_offload_gb
+#    min: 0
+#    max: 16
+#    step: 4
+
+# --enforce-eager: disable CUDA graphs (useful for debugging or edge cases)
+#  - name: enforce_eager
+#    options: ["true", "false"]

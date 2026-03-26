@@ -29,14 +29,26 @@ parameters:
     max: 1024
     step: 64
   - name: max_num_batched_tokens
-    min: 1024
-    max: 16384
-    step: 512
+    min: 8192
+    max: 32768
+    step: 2048
+  - name: enable_chunked_prefill
+    options: ["true", "false"]
+  - name: enable_prefix_caching
+    options: ["true", "false"]
+  - name: block_size
+    options: ["16", "32"]
+  - name: swap_space
+    min: 0
+    max: 8
+    step: 2
 
 static_parameters:
   dtype: auto
   max_model_len: 8192
+  kv_cache_dtype: auto
   tensor_parallel_size: 4
+  data_parallel_size: 1
 
 benchmark:
   provider: guidellm

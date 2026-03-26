@@ -26,13 +26,22 @@ parameters:
     max: 512
     step: 32
   - name: max_num_batched_tokens
-    min: 512
-    max: 8192
-    step: 256
+    min: 4096
+    max: 16384
+    step: 1024
+  - name: enable_chunked_prefill
+    options: ["true", "false"]
+  - name: enable_prefix_caching
+    options: ["true", "false"]
+  - name: swap_space
+    min: 0
+    max: 8
+    step: 2
 
 static_parameters:
   dtype: bfloat16
   max_model_len: 4096
+  kv_cache_dtype: auto
 
 benchmark:
   provider: http

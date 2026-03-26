@@ -51,6 +51,7 @@ class HTMLReportGenerator:
         output_dir: Path,
         study_name: str = "study",
         baseline: BenchmarkResult | None = None,
+        objectives: list | None = None,
     ) -> Path:
         """Generate an HTML report and return the file path."""
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,7 @@ class HTMLReportGenerator:
 
         best = None
         if completed:
-            best = max(completed, key=lambda r: r.benchmark.throughput_req_per_sec)
+            best = self._select_best(completed, objectives)
 
         html_content = self._render(
             study_name=study_name,
@@ -234,6 +235,31 @@ Plotly.newPlot(combined, [
 </html>"""  # noqa: E501
 
     # ────────────────────────────────────────────
+    # Best trial selection
+    # ────────────────────────────────────────────
+
+    @staticmethod
+    def _select_best(completed: list[TrialResult], objectives: list | None = None) -> TrialResult:
+        """Select the best trial based on the primary objective metric."""
+        if not objectives:
+            return max(completed, key=lambda r: r.benchmark.output_tokens_per_sec)
+
+        primary = objectives[0]
+        metric = primary.metric
+        direction = getattr(primary, "direction", "maximize")
+        minimize = str(direction).lower() in ("minimize", "min")
+
+        def _score(r: TrialResult) -> float:
+            val = getattr(r.benchmark, metric, None)
+            if val is None:
+                return float("inf") if minimize else float("-inf")
+            return val
+
+        if minimize:
+            return min(completed, key=_score)
+        return max(completed, key=_score)
+
+    # ────────────────────────────────────────────
     # HTML fragment builders
     # ────────────────────────────────────────────
 
@@ -265,7 +291,12 @@ Plotly.newPlot(combined, [
         rows = ""
         for label, base_val, best_val, lower_better in rows_data:
             delta, css = _pct_change(base_val, best_val, lower_is_better=lower_better)
-            sign = "+" if delta > 0 else ""
+            if delta > 0:
+                sign = "+"
+            elif delta < 0:
+                sign = "-"
+            else:
+                sign = ""
             rows += (
                 f"<tr><td>{_esc(label)}</td>"
                 f"<td>{_esc(_fmt(base_val))}</td>"

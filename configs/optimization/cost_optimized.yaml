@@ -32,12 +32,21 @@ parameters:
     options: ["auto", "fp8"]
   - name: block_size
     options: ["16", "32"]
-# ── vLLM 0.17+ flags (uncomment to include in search) ──
-# --performance-mode: "balanced" | "interactivity" | "throughput" (PR #34936)
-# "throughput" mode doubles batch defaults, squeezing more out of each GPU-hour.
+  - name: swap_space
+    min: 2
+    max: 8
+    step: 2
+# ── vLLM 0.17.1 parameters ──
+# --performance-mode: "throughput" doubles batch defaults for more tokens/GPU-hour
 #  - name: performance_mode
 #    options: ["throughput", "balanced"]
-#
+
 # --scheduling-policy: request scheduling algorithm
 #  - name: scheduling_policy
 #    options: ["fcfs", "priority"]
+
+# --cpu-offload-gb: offload model weights to CPU (run larger models on cheaper GPUs)
+#  - name: cpu_offload_gb
+#    min: 0
+#    max: 16
+#    step: 4

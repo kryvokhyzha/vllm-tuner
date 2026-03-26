@@ -39,18 +39,34 @@ parameters:
     min: 2
     max: 8
     step: 2
-# ── vLLM 0.17+ flags (uncomment to include in search) ──
-# --performance-mode: "balanced" | "interactivity" | "throughput" (PR #34936)
-# Simplifies tuning for common scenarios; may overlap with explicit batch params above.
+# ── vLLM 0.17.1 parameters ──
+# --performance-mode: runtime behavior preset
+#   WARNING: may overlap with explicit batch params above
 #  - name: performance_mode
 #    options: ["balanced", "interactivity", "throughput"]
-#
+
 # --scheduling-policy: request scheduling algorithm
 #  - name: scheduling_policy
 #    options: ["fcfs", "priority"]
-#
-# --max-num-partial-prefills: concurrent partial prefills (Hopper+)
+
+# --max-num-partial-prefills: concurrent partial prefills (chunked prefill, Hopper+)
 #  - name: max_num_partial_prefills
 #    min: 1
 #    max: 4
 #    step: 1
+
+# --long-prefill-token-threshold: prompts above this are "long" for scheduling
+#  - name: long_prefill_token_threshold
+#    min: 0
+#    max: 4096
+#    step: 512
+
+# --cpu-offload-gb: offload model weights to CPU
+#  - name: cpu_offload_gb
+#    min: 0
+#    max: 16
+#    step: 4
+
+# --enforce-eager: disable CUDA graphs
+#  - name: enforce_eager
+#    options: ["true", "false"]
