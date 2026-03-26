@@ -111,6 +111,11 @@ class BenchmarkResult(BaseModel):
     successful_requests: int = 0
     failed_requests: int = 0
     duration_seconds: float = 0.0
+    avg_output_tokens_per_request: float = 0.0
+    min_output_tokens_per_request: int = 0
+    max_output_tokens_per_request: int = 0
+    expected_output_tokens: int = 0
+    expected_prompt_tokens: int = 0
 
 
 # ──────────────────────────────────────

@@ -84,6 +84,7 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
         successful = 0
         failed = 0
         total_output_tokens = 0
+        token_counts: list[int] = []
 
         # Verify server is reachable before starting benchmark
         if not self._health_check(server_url):
@@ -142,11 +143,13 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
                     latencies.append(res["latency"])
                     if res["ttft"] is not None:
                         ttfts.append(res["ttft"])
-                    total_output_tokens += res.get("output_tokens", 0)
+                    req_tokens = res.get("output_tokens", 0)
+                    total_output_tokens += req_tokens
+                    token_counts.append(req_tokens)
                     self._log(
                         "Request completed: {:.2f}s latency, {} tokens (ok={}/fail={}/total={})",
                         res["latency"],
-                        res.get("output_tokens", 0),
+                        req_tokens,
                         successful,
                         failed,
                         total,
@@ -162,10 +165,27 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
         duration = time.monotonic() - start_time
         self._log("Benchmark finished: {} successful, {} failed in {:.1f}s", successful, failed, duration)
 
+        if token_counts:
+            avg_tok = sum(token_counts) / len(token_counts)
+            min_tok = min(token_counts)
+            max_tok = max(token_counts)
+            self._log(
+                "Token distribution: avg={:.0f}, min={}, max={} (expected ~{})",
+                avg_tok,
+                min_tok,
+                max_tok,
+                config.output_tokens,
+            )
+
         if not latencies:
             self.last_error = f"No successful requests ({failed} failed out of {total})"
             self._log("WARNING: {}", self.last_error)
-            return BenchmarkResult(total_requests=total, failed_requests=failed)
+            return BenchmarkResult(
+                total_requests=total,
+                failed_requests=failed,
+                expected_output_tokens=config.output_tokens,
+                expected_prompt_tokens=config.prompt_tokens,
+            )
 
         latencies.sort()
         p50_idx = int(len(latencies) * 0.50)
@@ -174,6 +194,10 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
 
         throughput = successful / duration if duration > 0 else 0.0
         tokens_per_sec = total_output_tokens / duration if duration > 0 else 0.0
+
+        avg_tok = sum(token_counts) / len(token_counts) if token_counts else 0.0
+        min_tok = min(token_counts) if token_counts else 0
+        max_tok = max(token_counts) if token_counts else 0
 
         return BenchmarkResult(
             throughput_req_per_sec=throughput,
@@ -186,6 +210,11 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
             successful_requests=successful,
             failed_requests=failed,
             duration_seconds=duration,
+            avg_output_tokens_per_request=avg_tok,
+            min_output_tokens_per_request=min_tok,
+            max_output_tokens_per_request=max_tok,
+            expected_output_tokens=config.output_tokens,
+            expected_prompt_tokens=config.prompt_tokens,
         )
 
     @staticmethod
@@ -207,6 +236,7 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
         start = time.monotonic()
         ttft = None
         output_tokens = 0
+        finish_reason = None
         try:
             async with client.stream("POST", url, json=payload) as response:
                 if response.status_code != 200:
@@ -216,7 +246,6 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
                 async for chunk in response.aiter_lines():
                     if not chunk.strip():
                         continue
-                    # SSE format: "data: {...}" or "data: [DONE]"
                     if chunk.startswith("data: "):
                         data_str = chunk[6:]
                         if data_str.strip() == "[DONE]":
@@ -227,15 +256,32 @@ class HTTPBenchmarkProvider(BenchmarkProvider):
                             data = json.loads(data_str)
                             choices = data.get("choices", [])
                             if choices:
-                                # Each streaming chunk has one token
                                 output_tokens += 1
+                                fr = choices[0].get("finish_reason")
+                                if fr is not None:
+                                    finish_reason = fr
+                            usage = data.get("usage")
+                            if usage and "completion_tokens" in usage:
+                                output_tokens = usage["completion_tokens"]
                         except json.JSONDecodeError:
                             pass
             latency = time.monotonic() - start
+
+            min_expected = max(1, int(config.output_tokens * 0.1))
+            if output_tokens < min_expected:
+                logger.debug(
+                    "Discarding short response: {} tokens (expected >= {}, finish_reason={})",
+                    output_tokens,
+                    min_expected,
+                    finish_reason,
+                )
+                return None
+
             return {
                 "latency": latency,
                 "ttft": ttft,
                 "output_tokens": output_tokens,
+                "finish_reason": finish_reason,
             }
         except httpx.ConnectError as exc:
             logger.warning("Server connection refused (server may have crashed): {}", exc)

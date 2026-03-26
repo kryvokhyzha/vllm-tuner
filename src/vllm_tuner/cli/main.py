@@ -205,6 +205,7 @@ class CLI:
                 study_config.study.name,
                 baseline=baseline_result,
                 objectives=study_config.optimization.objectives,
+                study_config=study_config,
             )
             logger.info("Results saved to {}", out_dir)
 

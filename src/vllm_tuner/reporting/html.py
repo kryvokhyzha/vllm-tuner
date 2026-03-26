@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from vllm_tuner.core.models import BenchmarkResult, TrialResult, TrialStatus
+from vllm_tuner.core.models import BenchmarkResult, StudyConfig, TrialResult, TrialStatus
 from vllm_tuner.helper.logging import get_logger
 
 
@@ -52,6 +52,7 @@ class HTMLReportGenerator:
         study_name: str = "study",
         baseline: BenchmarkResult | None = None,
         objectives: list | None = None,
+        study_config: StudyConfig | None = None,
     ) -> Path:
         """Generate an HTML report and return the file path."""
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +72,7 @@ class HTMLReportGenerator:
             completed=completed,
             best=best,
             baseline=baseline,
+            study_config=study_config,
         )
 
         report_path.write_text(html_content, encoding="utf-8")
@@ -97,7 +99,9 @@ class HTMLReportGenerator:
                     "p95": round(bm.p95_latency_ms, 2),
                     "p99": round(bm.p99_latency_ms, 2),
                     "ttft": round(bm.ttft_ms, 2),
+                    "avg_tok_req": round(bm.avg_output_tokens_per_request, 1),
                     "mem_util": round(hw.avg_utilization, 3) if hw else 0,
+                    "peak_vram_gb": round(hw.peak_memory_used_mb / 1024, 2) if hw else 0,
                     "params": r.config.parameters if r.config else {},
                 }
             )
@@ -115,9 +119,17 @@ class HTMLReportGenerator:
         completed: list[TrialResult],
         best: TrialResult | None,
         baseline: BenchmarkResult | None,
+        study_config: StudyConfig | None = None,
     ) -> str:
         gen_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         chart_json = json.dumps(self._chart_data(completed))
+
+        expected_output = 0
+        if study_config:
+            expected_output = study_config.benchmark.output_tokens
+
+        # ── Benchmark config section ──
+        bench_config_html = self._benchmark_config_section(study_config) if study_config else ""
 
         # ── Summary metric cards ──
         bm = best.benchmark if best else None
@@ -130,7 +142,7 @@ class HTMLReportGenerator:
         best_params_html = self._best_params_section(best)
 
         # ── Trial results table ──
-        trials_table_html = self._trials_table(results)
+        trials_table_html = self._trials_table(results, expected_output)
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -148,6 +160,8 @@ class HTMLReportGenerator:
   <p class="timestamp">Generated: {_esc(gen_time)}</p>
   <h2>Study: {_esc(study_name)}</h2>
 
+  {bench_config_html}
+
   <h3>Best Configuration Metrics</h3>
   {cards_html}
 
@@ -162,6 +176,8 @@ class HTMLReportGenerator:
 <div class="chart-container"><h3>Latency Over Trials (P95)</h3><div id="chart-latency"></div></div>
 <div class="chart-container"><h3>Pareto Front: Throughput vs Latency</h3><div id="chart-pareto"></div></div>
 <div class="chart-container"><h3>Tokens per Second</h3><div id="chart-tokens"></div></div>
+<div class="chart-container"><h3>Avg Tokens per Request</h3><div id="chart-tok-req"></div></div>
+<div class="chart-container"><h3>GPU Utilization &amp; VRAM</h3><div id="chart-gpu"></div></div>
 <div class="chart-container">
   <h3>Combined View</h3>
   <div id="chart-combined" style="height:700px"></div>
@@ -175,6 +191,7 @@ class HTMLReportGenerator:
 <script>
 (function() {{
 var D = {chart_json};
+var expectedOutput = {expected_output};
 var T = D.trials;
 if (!T.length) return;
 
@@ -183,6 +200,8 @@ var tp   = T.map(t => t.throughput);
 var p95  = T.map(t => t.p95);
 var tps  = T.map(t => t.tokens_per_sec);
 var mem  = T.map(t => t.mem_util);
+var avgTokReq = T.map(t => t.avg_tok_req);
+var peakVram  = T.map(t => t.peak_vram_gb);
 
 // Throughput
 Plotly.newPlot('chart-throughput', [{{
@@ -212,6 +231,44 @@ Plotly.newPlot('chart-tokens', [{{
   line: {{color: '#9b59b6'}},
   hovertemplate: 'Trial %{{x}}<br>%{{y:.1f}} tok/s<extra></extra>'
 }}], {{xaxis: {{title: 'Trial'}}, yaxis: {{title: 'tokens/s'}}, hovermode: 'x unified', margin: {{t:10}} }});
+
+// Avg Tokens per Request (with expected reference line)
+var tokReqTraces = [{{
+  x: nums, y: avgTokReq, type: 'bar', name: 'Avg Tok/Req',
+  marker: {{color: avgTokReq.map(v => v < expectedOutput * 0.5 ? '#e74c3c' : '#27ae60')}},
+  hovertemplate: 'Trial %{{x}}<br>%{{y:.0f}} tokens/req<extra></extra>'
+}}];
+var tokReqLayout = {{
+  xaxis: {{title: 'Trial'}}, yaxis: {{title: 'tokens/request'}},
+  hovermode: 'x unified', margin: {{t:10}},
+  shapes: expectedOutput > 0 ? [{{
+    type: 'line', x0: -0.5, x1: nums.length - 0.5,
+    y0: expectedOutput, y1: expectedOutput,
+    line: {{color: '#e67e22', width: 2, dash: 'dash'}}
+  }}] : [],
+  annotations: expectedOutput > 0 ? [{{
+    x: nums[nums.length-1], y: expectedOutput,
+    text: 'expected: ' + expectedOutput,
+    showarrow: false, yshift: 12,
+    font: {{color: '#e67e22', size: 11}}
+  }}] : []
+}};
+Plotly.newPlot('chart-tok-req', tokReqTraces, tokReqLayout);
+
+// GPU Utilization & VRAM
+Plotly.newPlot('chart-gpu', [
+  {{x: nums, y: mem.map(v => v * 100), type: 'bar', name: 'GPU Util %',
+    marker: {{color: '#3498db', opacity: 0.7}},
+    hovertemplate: 'Trial %{{x}}<br>%{{y:.1f}}%<extra></extra>'}},
+  {{x: nums, y: peakVram, mode: 'lines+markers', name: 'Peak VRAM (GB)',
+    yaxis: 'y2', line: {{color: '#e74c3c', width: 2}},
+    hovertemplate: 'Trial %{{x}}<br>%{{y:.1f}} GB<extra></extra>'}}
+], {{
+  xaxis: {{title: 'Trial'}},
+  yaxis: {{title: 'GPU Utilization %', side: 'left'}},
+  yaxis2: {{title: 'Peak VRAM (GB)', side: 'right', overlaying: 'y'}},
+  hovermode: 'x unified', margin: {{t:10}}, legend: {{x: 0, y: 1.15, orientation: 'h'}}
+}});
 
 // Combined 2x2
 var combined = document.getElementById('chart-combined');
@@ -264,10 +321,34 @@ Plotly.newPlot(combined, [
     # ────────────────────────────────────────────
 
     @staticmethod
+    def _benchmark_config_section(config: StudyConfig) -> str:
+        """Render the benchmark configuration summary."""
+        bc = config.benchmark
+        sp = config.static_parameters
+        rows = [
+            ("Model", config.model),
+            ("Prompt Tokens (configured)", bc.prompt_tokens),
+            ("Output Tokens (configured)", bc.output_tokens),
+            ("Concurrent Requests", bc.concurrent_requests),
+            ("Max Seconds", bc.max_seconds),
+            ("Benchmark Provider", bc.provider.value if hasattr(bc.provider, "value") else bc.provider),
+        ]
+        for k, v in sp.items():
+            rows.append((f"static: {k}", v))
+        row_html = "".join(f"<tr><td>{_esc(label)}</td><td>{_esc(value)}</td></tr>" for label, value in rows)
+        return f"""<h3>Benchmark Configuration</h3>
+<table class="params-table">
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>{row_html}</tbody>
+</table>"""
+
+    @staticmethod
     def _metric_cards(bm: BenchmarkResult | None, total_trials: int, best: TrialResult | None) -> str:
         cards = [
             (_fmt(bm.throughput_req_per_sec) if bm else "-", "Throughput (req/s)"),
+            (_fmt(bm.output_tokens_per_sec, 1) if bm else "-", "Tokens/s"),
             (_fmt(bm.p95_latency_ms, 1) if bm else "-", "P95 Latency (ms)"),
+            (_fmt(bm.avg_output_tokens_per_request, 0) if bm else "-", "Avg Tok/Req"),
             (str(total_trials), "Total Trials"),
             (f"#{best.trial_number}" if best else "-", "Best Trial"),
         ]
@@ -283,6 +364,7 @@ Plotly.newPlot(combined, [
         rows_data = [
             ("Throughput (req/s)", baseline.throughput_req_per_sec, best.throughput_req_per_sec, False),
             ("Tokens/s", baseline.output_tokens_per_sec, best.output_tokens_per_sec, False),
+            ("Avg Tokens/Request", baseline.avg_output_tokens_per_request, best.avg_output_tokens_per_request, False),
             ("P50 Latency (ms)", baseline.p50_latency_ms, best.p50_latency_ms, True),
             ("P95 Latency (ms)", baseline.p95_latency_ms, best.p95_latency_ms, True),
             ("P99 Latency (ms)", baseline.p99_latency_ms, best.p99_latency_ms, True),
@@ -321,10 +403,27 @@ Plotly.newPlot(combined, [
 </table>"""
 
     @staticmethod
-    def _trials_table(results: list[TrialResult]) -> str:
+    def _trials_table(results: list[TrialResult], expected_output: int = 0) -> str:
         rows = []
         for r in results:
             bm = r.benchmark
+            hw = r.hardware
+
+            if bm and bm.successful_requests > 0:
+                req_str = f"{bm.successful_requests}/{bm.total_requests}"
+            elif bm:
+                req_str = f"0/{bm.total_requests}"
+            else:
+                req_str = "-"
+
+            avg_tok = bm.avg_output_tokens_per_request if bm else 0
+            is_low = expected_output > 0 and 0 < avg_tok < expected_output * 0.5
+            tok_css = ' class="negative"' if is_low else ""
+            tok_str = f"{avg_tok:.0f}" if bm and avg_tok > 0 else "-"
+
+            peak_vram_str = f"{hw.peak_memory_used_mb / 1024:.1f}" if hw and hw.peak_memory_used_mb > 0 else "-"
+            gpu_util_str = f"{hw.avg_utilization * 100:.1f}" if hw and hw.avg_utilization > 0 else "-"
+
             rows.append(
                 "<tr>"
                 f"<td>{_esc(r.trial_number)}</td>"
@@ -332,10 +431,14 @@ Plotly.newPlot(combined, [
                 f"<td><code>{_esc(r.config.parameters if r.config else {})}</code></td>"
                 f"<td>{_fmt(bm.throughput_req_per_sec) if bm else '-'}</td>"
                 f"<td>{_fmt(bm.output_tokens_per_sec, 1) if bm else '-'}</td>"
+                f"<td>{req_str}</td>"
+                f"<td{tok_css}>{tok_str}</td>"
                 f"<td>{_fmt(bm.p50_latency_ms, 1) if bm else '-'}</td>"
                 f"<td>{_fmt(bm.p95_latency_ms, 1) if bm else '-'}</td>"
                 f"<td>{_fmt(bm.p99_latency_ms, 1) if bm else '-'}</td>"
                 f"<td>{_fmt(bm.ttft_ms, 1) if bm and bm.ttft_ms else '-'}</td>"
+                f"<td>{peak_vram_str}</td>"
+                f"<td>{gpu_util_str}</td>"
                 f"<td>{_fmt(r.duration_seconds, 1) if r.duration_seconds else '-'}</td>"
                 f"<td>{_esc(r.error_message or '')}</td>"
                 "</tr>"
@@ -343,9 +446,10 @@ Plotly.newPlot(combined, [
         return f"""<table>
 <thead><tr>
   <th>#</th><th>Status</th><th>Parameters</th>
-  <th>Throughput</th><th>Tokens/s</th>
+  <th>Throughput</th><th>Tokens/s</th><th>Requests</th><th>Avg Tok/Req</th>
   <th>P50 (ms)</th><th>P95 (ms)</th><th>P99 (ms)</th>
-  <th>TTFT (ms)</th><th>Duration (s)</th><th>Error</th>
+  <th>TTFT (ms)</th><th>Peak VRAM (GB)</th><th>GPU Util%</th>
+  <th>Duration (s)</th><th>Error</th>
 </tr></thead>
 <tbody>{"".join(rows)}</tbody>
 </table>"""
@@ -358,7 +462,7 @@ Plotly.newPlot(combined, [
 _CSS = """<style>
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  max-width: 1200px; margin: 0 auto; padding: 20px;
+  max-width: 1400px; margin: 0 auto; padding: 20px;
   background: #f5f5f5; color: #333;
 }
 h1 { color: #2c3e50; }
@@ -369,7 +473,7 @@ h2 { color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
 }
 .timestamp { color: #95a5a6; font-size: 14px; }
 .metrics-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 15px; margin: 20px 0;
 }
 .metric-card {
@@ -385,11 +489,11 @@ h2 { color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
 .params-table, table {
   width: 100%; border-collapse: collapse; margin: 20px 0;
 }
-th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #ddd; font-size: 13px; }
 th { background: #1a1a2e; color: #fff; }
 tr:nth-child(even) { background: #f9f9f9; }
 tr:hover { background: #e8f0fe; }
-code { background: #f4f4f4; padding: 2px 4px; border-radius: 3px; font-size: .85em; }
+code { background: #f4f4f4; padding: 2px 4px; border-radius: 3px; font-size: .8em; }
 .positive { color: #2ecc71; font-weight: bold; }
 .negative { color: #e74c3c; font-weight: bold; }
 .neutral  { color: #7f8c8d; font-weight: bold; }
