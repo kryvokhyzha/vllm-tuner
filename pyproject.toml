@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vllm-tuner"
-version = "0.1.5"
+version = "0.1.6"
 description = "A Python package for tuning vLLM hyperparameters."
 readme = "README.md"
 authors = [
@@ -48,11 +48,13 @@ gpu = ["nvidia-ml-py >= 12.560.30"]
 guidellm = ["guidellm"]
 http = ["httpx >= 0.27"]
 ray = ["ray[default] >= 2.40"]
+report = ["scikit-learn ~= 1.8.0"]
 all = [
     "vllm-tuner[gpu]",
     "vllm-tuner[guidellm]",
     "vllm-tuner[http]",
     "vllm-tuner[ray]",
+    "vllm-tuner[report]",
 ]
 
 [dependency-groups]

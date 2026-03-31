@@ -206,6 +206,7 @@ class CLI:
                 baseline=baseline_result,
                 objectives=study_config.optimization.objectives,
                 study_config=study_config,
+                optuna_study=controller.study if controller else None,
             )
             logger.info("Results saved to {}", out_dir)
 

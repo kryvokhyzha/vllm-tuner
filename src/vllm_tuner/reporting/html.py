@@ -53,6 +53,7 @@ class HTMLReportGenerator:
         baseline: BenchmarkResult | None = None,
         objectives: list | None = None,
         study_config: StudyConfig | None = None,
+        optuna_study: object | None = None,
     ) -> Path:
         """Generate an HTML report and return the file path."""
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -73,6 +74,7 @@ class HTMLReportGenerator:
             best=best,
             baseline=baseline,
             study_config=study_config,
+            optuna_study=optuna_study,
         )
 
         report_path.write_text(html_content, encoding="utf-8")
@@ -120,6 +122,7 @@ class HTMLReportGenerator:
         best: TrialResult | None,
         baseline: BenchmarkResult | None,
         study_config: StudyConfig | None = None,
+        optuna_study: object | None = None,
     ) -> str:
         gen_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         chart_json = json.dumps(self._chart_data(completed))
@@ -143,6 +146,23 @@ class HTMLReportGenerator:
 
         # ── Trial results table ──
         trials_table_html = self._trials_table(results, expected_output)
+
+        # ── Optuna analysis charts ──
+        optuna_charts = self._optuna_charts(optuna_study) if optuna_study else []
+        optuna_divs = ""
+        optuna_scripts = ""
+        for i, (title, fig_json) in enumerate(optuna_charts):
+            div_id = f"optuna-chart-{i}"
+            optuna_divs += f'<div class="chart-container"><h3>{_esc(title)}</h3><div id="{div_id}"></div></div>\n'
+            optuna_scripts += (
+                f"(function() {{\n"
+                f"  var spec = {fig_json};\n"
+                f"  Plotly.newPlot('{div_id}', spec.data, spec.layout, {{responsive: true}});\n"
+                f"}})();\n"
+            )
+        optuna_section = ""
+        if optuna_divs:
+            optuna_section = f"<h2>Optuna Analysis</h2>\n{optuna_divs}"
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -182,6 +202,8 @@ class HTMLReportGenerator:
   <h3>Combined View</h3>
   <div id="chart-combined" style="height:700px"></div>
 </div>
+
+{optuna_section}
 
 <h2>Trial Results</h2>
 {trials_table_html}
@@ -287,6 +309,7 @@ Plotly.newPlot(combined, [
   margin: {{t:30}}
 }});
 }})();
+{optuna_scripts}
 </script>
 </body>
 </html>"""  # noqa: E501
@@ -315,6 +338,52 @@ Plotly.newPlot(combined, [
         if minimize:
             return min(completed, key=_score)
         return max(completed, key=_score)
+
+    # ────────────────────────────────────────────
+    # Optuna visualization charts
+    # ────────────────────────────────────────────
+
+    @staticmethod
+    def _optuna_charts(study: object) -> list[tuple[str, str]]:
+        """Generate Optuna visualization charts as serialized Plotly JSON.
+
+        Returns a list of (title, json_string) tuples.
+        Gracefully degrades when optional dependencies are missing.
+        """
+        try:
+            import optuna.visualization as vis
+        except ImportError:
+            logger.debug("optuna.visualization not available, skipping Optuna charts")
+            return []
+
+        charts: list[tuple[str, str]] = []
+        completed_trials = [t for t in study.trials if t.state.name == "COMPLETE"]
+        if len(completed_trials) < 2:
+            logger.debug("Not enough completed trials ({}) for Optuna charts", len(completed_trials))
+            return []
+
+        # Parameter Importances (requires scikit-learn)
+        try:
+            fig = vis.plot_param_importances(study)
+            charts.append(("Parameter Importances", fig.to_json()))
+        except Exception as exc:
+            logger.debug("Skipping param importances chart: {}", exc)
+
+        # Parallel Coordinate
+        try:
+            fig = vis.plot_parallel_coordinate(study)
+            charts.append(("Parallel Coordinate", fig.to_json()))
+        except Exception as exc:
+            logger.debug("Skipping parallel coordinate chart: {}", exc)
+
+        # Slice Plot
+        try:
+            fig = vis.plot_slice(study)
+            charts.append(("Parameter Slice", fig.to_json()))
+        except Exception as exc:
+            logger.debug("Skipping slice chart: {}", exc)
+
+        return charts
 
     # ────────────────────────────────────────────
     # HTML fragment builders
