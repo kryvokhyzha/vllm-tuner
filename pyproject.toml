@@ -28,14 +28,14 @@ requires-python = ">=3.11,<3.14"
 
 dependencies = [
     # Core dependencies
-    "rich ~= 14.3.0",
+    "rich >= 14.3,< 15.1",
     "setuptools >= 75.6.0",
     "loguru ~= 0.7.3",
     "fire ~= 0.7.1",
     "joblib ~= 1.5.2",
     "pydantic >= 2.11.1, < 2.13.0",
     "pydantic-settings >= 2.13.0",
-    "optuna ~= 4.7.0",
+    "optuna >= 4.7,< 4.9",
 
     # Other dependencies
     "pandas ~= 3.0.0",
